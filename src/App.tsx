@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { TelemetryFrame, ConnectionSource, LapRecord } from './types';
+import { TelemetryFrame, ConnectionSource, LapRecord, TrackInfo, CarInfo } from './types';
 import { LMU_CARS, LMU_TRACKS } from './data/lmuData';
 import { Header, TabType } from './components/Header';
 import { DashboardHUD } from './components/DashboardHUD';
@@ -10,17 +10,17 @@ import { TelemetryLab } from './components/TelemetryLab';
 import { PitStrategyPlanner } from './components/PitStrategyPlanner';
 import { DuckDBAnalyzer } from './components/DuckDBAnalyzer';
 import { PythonBridgeModal } from './components/PythonBridgeModal';
-import { SimulatorControls } from './components/SimulatorControls';
 import { UploadedFileReplayBar } from './components/UploadedFileReplayBar';
 import { LapConsumptionModal } from './components/LapConsumptionModal';
 import { MobilePitWallView } from './components/MobilePitWallView';
 import { DriverCoachingLab } from './components/DriverCoachingLab';
-import { parseRowsToLapRecords, parseRowsToTracePoints } from './lib/telemetryParser';
+import { parseRowsToLapRecords, parseRowsToTracePoints, rowToTelemetryFrame } from './lib/telemetryParser';
+import { executeDuckDBQuery } from './lib/duckdb';
 
 interface ActiveUploadedState {
   fileName: string;
-  frames: TelemetryFrame[];
-  rows: any[];
+  tableName: string;
+  totalRows: number;
   laps: number[];
   lapRecords: LapRecord[];
   traceData: any[];
@@ -28,17 +28,18 @@ interface ActiveUploadedState {
   selectedLap: number;
   isPlaying: boolean;
   playbackSpeed: number;
+  track: TrackInfo;
+  car: CarInfo;
 }
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabType>('hud');
   const [isPythonBridgeModalOpen, setIsPythonBridgeModalOpen] = useState<boolean>(false);
   const [isConsumptionModalOpen, setIsConsumptionModalOpen] = useState<boolean>(false);
-  const [showSimulatorControls, setShowSimulatorControls] = useState<boolean>(false);
   const [audioShiftBeep, setAudioShiftBeep] = useState<boolean>(false);
 
   // Connection & telemetry state
-  const [connectionSource, setConnectionSource] = useState<ConnectionSource>('SIMULATOR');
+  const [connectionSource, setConnectionSource] = useState<ConnectionSource>('NO_DATA');
   const [isPythonBridgeConnected, setIsPythonBridgeConnected] = useState<boolean>(false);
 
   // Default initial telemetry frame
@@ -119,38 +120,59 @@ export default function App() {
     uploadedFileStateRef.current = uploadedFileState;
   }, [uploadedFileState]);
 
+  // Helper to fetch a single frame from DuckDB
+  const fetchReplayFrame = async (tableName: string, index: number, totalRows: number, customTrack?: TrackInfo, customCar?: CarInfo) => {
+    try {
+      const res = await executeDuckDBQuery(`SELECT * FROM "${tableName}" WHERE sample_id >= ${index} LIMIT 1;`);
+      if (res.rows && res.rows.length > 0) {
+        const frame = rowToTelemetryFrame(res.rows[0], index, totalRows, customTrack, customCar);
+        setTelemetry(frame);
+      }
+    } catch (err) {
+      console.warn('Failed to fetch replay frame:', err);
+    }
+  };
+
   // Replay playback timer loop
   useEffect(() => {
     if (!uploadedFileState || !uploadedFileState.isPlaying) return;
 
-    const interval = setInterval(() => {
-      setUploadedFileState((prev) => {
-        if (!prev || !prev.isPlaying || prev.frames.length === 0) return prev;
-        const nextIndex = (prev.currentSampleIndex + prev.playbackSpeed) % prev.frames.length;
-        setTelemetry(prev.frames[nextIndex]);
-        return {
-          ...prev,
-          currentSampleIndex: nextIndex,
-        };
-      });
+    let isFetching = false;
+    const interval = setInterval(async () => {
+      if (isFetching || !uploadedFileStateRef.current) return;
+      const currentState = uploadedFileStateRef.current;
+      if (!currentState.isPlaying) return;
+
+      isFetching = true;
+      const nextIndex = (currentState.currentSampleIndex + currentState.playbackSpeed) % currentState.totalRows;
+      
+      setUploadedFileState((prev) => prev ? { ...prev, currentSampleIndex: nextIndex } : prev);
+      
+      await fetchReplayFrame(currentState.tableName, nextIndex, currentState.totalRows, currentState.track, currentState.car);
+      
+      isFetching = false;
     }, 100);
 
     return () => clearInterval(interval);
-  }, [uploadedFileState?.isPlaying, uploadedFileState?.playbackSpeed, uploadedFileState?.frames.length]);
+  }, [uploadedFileState?.isPlaying, uploadedFileState?.playbackSpeed, uploadedFileState?.totalRows]);
 
   // Handler when telemetry is loaded from file / DuckDB
-  const handleLoadTelemetryToHUD = (frames: TelemetryFrame[], fileName?: string, rows?: any[]) => {
-    if (!frames || frames.length === 0) return;
-
-    const rawRows = rows || [];
-    const lapRecords = parseRowsToLapRecords(rawRows);
-    const traceData = parseRowsToTracePoints(rawRows);
-    const laps = Array.from(new Set(frames.map((f) => f.lapNumber))).sort((a, b) => a - b);
+  const handleLoadTelemetryToHUD = async (
+    tableName: string,
+    fileName: string,
+    totalRows: number,
+    laps: number[],
+    lapRecords: LapRecord[],
+    traceData: any[],
+    track: TrackInfo,
+    car: CarInfo
+  ) => {
+    if (totalRows === 0) return;
 
     const activeState: ActiveUploadedState = {
       fileName: fileName || 'Uploaded Telemetry File',
-      frames,
-      rows: rawRows,
+      tableName,
+      totalRows,
       laps: laps.length > 0 ? laps : [1],
       lapRecords,
       traceData,
@@ -158,38 +180,44 @@ export default function App() {
       selectedLap: laps[0] || 1,
       isPlaying: false,
       playbackSpeed: 1,
+      track,
+      car
     };
 
     // Synchronously update ref immediately to prevent race conditions with WebSocket
     uploadedFileStateRef.current = activeState;
     setUploadedFileState(activeState);
-    setTelemetry(frames[0]);
     setConnectionSource('REPLAY');
+    await fetchReplayFrame(tableName, 0, totalRows, track, car);
   };
 
   const handleSampleChange = (index: number) => {
     if (!uploadedFileState) return;
-    const clampedIndex = Math.max(0, Math.min(uploadedFileState.frames.length - 1, index));
+    const clampedIndex = Math.max(0, Math.min(uploadedFileState.totalRows - 1, index));
     setUploadedFileState((prev) => {
       if (!prev) return null;
       const updated = { ...prev, currentSampleIndex: clampedIndex };
       uploadedFileStateRef.current = updated;
       return updated;
     });
-    setTelemetry(uploadedFileState.frames[clampedIndex]);
+    fetchReplayFrame(uploadedFileState.tableName, clampedIndex, uploadedFileState.totalRows, uploadedFileState.track, uploadedFileState.car);
   };
 
-  const handleSelectLap = (lapNum: number) => {
+  const handleSelectLap = async (lapNum: number) => {
     if (!uploadedFileState) return;
-    const firstMatchingIdx = uploadedFileState.frames.findIndex((f) => f.lapNumber === lapNum);
-    const targetIdx = firstMatchingIdx !== -1 ? firstMatchingIdx : 0;
-    setUploadedFileState((prev) => {
-      if (!prev) return null;
-      const updated = { ...prev, selectedLap: lapNum, currentSampleIndex: targetIdx };
-      uploadedFileStateRef.current = updated;
-      return updated;
-    });
-    setTelemetry(uploadedFileState.frames[targetIdx]);
+    try {
+      const res = await executeDuckDBQuery(`SELECT MIN(sample_id) as min_id FROM "${uploadedFileState.tableName}" WHERE lap_number = ${lapNum} OR lap = ${lapNum} OR Lap = ${lapNum};`);
+      const targetIdx = Number(res.rows[0]?.min_id || 0);
+      setUploadedFileState((prev) => {
+        if (!prev) return null;
+        const updated = { ...prev, selectedLap: lapNum, currentSampleIndex: targetIdx };
+        uploadedFileStateRef.current = updated;
+        return updated;
+      });
+      fetchReplayFrame(uploadedFileState.tableName, targetIdx, uploadedFileState.totalRows, uploadedFileState.track, uploadedFileState.car);
+    } catch (e) {
+      console.warn("Could not jump to lap:", e);
+    }
   };
 
   const handleTogglePlay = () => {
@@ -209,13 +237,13 @@ export default function App() {
       uploadedFileStateRef.current = updated;
       return updated;
     });
-    setTelemetry(uploadedFileState.frames[0]);
+    fetchReplayFrame(uploadedFileState.tableName, 0, uploadedFileState.totalRows, uploadedFileState.track, uploadedFileState.car);
   };
 
   const handleClearUploadedFile = () => {
     uploadedFileStateRef.current = null;
     setUploadedFileState(null);
-    setConnectionSource('SIMULATOR');
+    setConnectionSource('NO_DATA');
   };
 
   // Telemetry RAF Buffer to prevent UI thrashing at 60Hz+
@@ -261,7 +289,7 @@ export default function App() {
               }
 
               scheduleTelemetryUpdate(payload.data);
-              setConnectionSource(payload.source === 'PYTHON_BRIDGE' ? 'PYTHON_BRIDGE' : (uploadedFileStateRef.current ? 'REPLAY' : 'SIMULATOR'));
+              setConnectionSource(payload.source === 'PYTHON_BRIDGE' ? 'PYTHON_BRIDGE' : (uploadedFileStateRef.current ? 'REPLAY' : 'NO_DATA'));
               if (payload.source === 'PYTHON_BRIDGE') {
                 setIsPythonBridgeConnected(true);
               }
@@ -316,38 +344,6 @@ export default function App() {
     }
   };
 
-  // Sandbox tweak handlers
-  const handleRefillEnergy = () => {
-    setTelemetry((prev) => ({
-      ...prev,
-      fuelRemainingLiters: prev.car.fuelTankCapacityLiters || 90,
-      fuelRemainingPercent: 100,
-      virtualEnergyRemainingMJ: prev.car.virtualEnergyCapacityMJ || 910,
-      virtualEnergyRemainingPercent: 100,
-      estimatedLapsRemainingFuel: 31.5,
-      estimatedLapsRemainingVirtualEnergy: 31.5,
-    }));
-  };
-
-  const handleSetWeather = (weather: 'DRY' | 'GREASY' | 'DAMP' | 'WET' | 'HEAVY_RAIN') => {
-    setTelemetry((prev) => ({
-      ...prev,
-      weatherCondition: weather,
-    }));
-  };
-
-  const handleTriggerLowFuel = () => {
-    setTelemetry((prev) => ({
-      ...prev,
-      fuelRemainingLiters: 4.2,
-      virtualEnergyRemainingMJ: 42.0,
-      fuelRemainingPercent: 4.6,
-      virtualEnergyRemainingPercent: 4.6,
-      estimatedLapsRemainingFuel: 1.4,
-      estimatedLapsRemainingVirtualEnergy: 1.4,
-    }));
-  };
-
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans selection:bg-amber-500 selection:text-slate-950">
       {/* Top Header & Navigation */}
@@ -358,8 +354,6 @@ export default function App() {
         connectionSource={connectionSource}
         isPythonBridgeConnected={isPythonBridgeConnected}
         onOpenPythonBridgeModal={() => setIsPythonBridgeModalOpen(true)}
-        onToggleSimulatorControls={() => setShowSimulatorControls(!showSimulatorControls)}
-        showSimulatorControls={showSimulatorControls}
         audioShiftBeep={audioShiftBeep}
         setAudioShiftBeep={setAudioShiftBeep}
         onSelectCar={handleSelectCar}
@@ -372,7 +366,7 @@ export default function App() {
         {uploadedFileState && (
           <UploadedFileReplayBar
             fileName={uploadedFileState.fileName}
-            totalRows={uploadedFileState.frames.length}
+            totalRows={uploadedFileState.totalRows}
             availableLaps={uploadedFileState.laps}
             selectedLap={uploadedFileState.selectedLap}
             currentSampleIndex={uploadedFileState.currentSampleIndex}
@@ -392,24 +386,23 @@ export default function App() {
           />
         )}
 
-        {/* Floating Sandbox Controls Toolbar */}
-        {showSimulatorControls && (
-          <SimulatorControls
-            onRefillEnergy={handleRefillEnergy}
-            onSetWeather={handleSetWeather}
-            currentWeather={telemetry.weatherCondition}
-            onTriggerLowFuel={handleTriggerLowFuel}
-            onClose={() => setShowSimulatorControls(false)}
-          />
-        )}
-
         {/* Tab Views */}
+        {connectionSource === 'NO_DATA' && (
+          <div className="mb-6 bg-slate-900 border border-slate-700 p-6 rounded-2xl flex flex-col items-center justify-center text-center space-y-4">
+            <h2 className="text-xl font-bold text-white">No Telemetry Data Available</h2>
+            <p className="text-slate-400 max-w-lg">
+              Connect the live Python Bridge to stream real-time shared memory data from Le Mans Ultimate, or scroll down and use the DuckDB Analyzer to upload a saved telemetry file.
+            </p>
+            <div className="flex space-x-4 mt-2">
+              <button onClick={() => setIsPythonBridgeModalOpen(true)} className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-lg transition">Connect Live Bridge</button>
+            </div>
+          </div>
+        )}
         {activeTab === 'hud' && (
           <div className="space-y-6">
             <DashboardHUD
               telemetry={telemetry}
               audioShiftBeep={audioShiftBeep}
-              uploadedFrames={uploadedFileState?.frames}
               traceData={uploadedFileState?.traceData}
               onOpenConsumptionModal={() => setIsConsumptionModalOpen(true)}
             />
@@ -430,7 +423,6 @@ export default function App() {
             <PitStrategyPlanner
               telemetry={telemetry}
               uploadedLaps={uploadedFileState?.lapRecords}
-              uploadedFrames={uploadedFileState?.frames}
             />
           </div>
         )}

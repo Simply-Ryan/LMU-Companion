@@ -8,12 +8,11 @@ import { LiveVehicleDynamicsWidget } from './LiveVehicleDynamicsWidget';
 interface DashboardHUDProps {
   telemetry: TelemetryFrame;
   audioShiftBeep: boolean;
-  uploadedFrames?: TelemetryFrame[];
   traceData?: any[];
   onOpenConsumptionModal?: () => void;
 }
 
-export const DashboardHUD: React.FC<DashboardHUDProps> = ({ telemetry, audioShiftBeep, uploadedFrames, traceData, onOpenConsumptionModal }) => {
+export const DashboardHUD: React.FC<DashboardHUDProps> = ({ telemetry, audioShiftBeep, traceData, onOpenConsumptionModal }) => {
   const { rpm, gear, speedKmh, speedMph, car, inputs, tires, electronics } = telemetry;
   const maxRpm = car.maxRPM || 8500;
   const shiftRpm = car.shiftRPM || 8200;
@@ -93,7 +92,6 @@ export const DashboardHUD: React.FC<DashboardHUDProps> = ({ telemetry, audioShif
       {/* 2D Top View Circuit Map with Live Car Marker & Inputs */}
       <TrackMap2D
         telemetry={telemetry}
-        frames={uploadedFrames}
         traceData={traceData}
       />
 

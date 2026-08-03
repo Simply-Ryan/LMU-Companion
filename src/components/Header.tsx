@@ -32,8 +32,6 @@ interface HeaderProps {
   connectionSource: ConnectionSource;
   isPythonBridgeConnected: boolean;
   onOpenPythonBridgeModal: () => void;
-  onToggleSimulatorControls: () => void;
-  showSimulatorControls: boolean;
   audioShiftBeep: boolean;
   setAudioShiftBeep: React.Dispatch<React.SetStateAction<boolean>>;
   onSelectCar?: (carId: string) => void;
@@ -47,8 +45,6 @@ export const Header: React.FC<HeaderProps> = ({
   connectionSource,
   isPythonBridgeConnected,
   onOpenPythonBridgeModal,
-  onToggleSimulatorControls,
-  showSimulatorControls,
   audioShiftBeep,
   setAudioShiftBeep,
   onSelectCar,
@@ -70,7 +66,7 @@ export const Header: React.FC<HeaderProps> = ({
             <span className="bg-gradient-to-r from-amber-500 via-yellow-400 to-red-500 text-slate-950 px-2 py-0.5 rounded font-black text-sm italic">
               LMU
             </span>
-            <span className="hidden sm:inline">TELEMETRY COMPANION</span>
+            <span className="hidden sm:inline">COMPANION</span>
           </div>
 
           <div className="h-4 w-[1px] bg-slate-800 hidden md:block" />
@@ -92,7 +88,7 @@ export const Header: React.FC<HeaderProps> = ({
             ) : (
               <>
                 <WifiOff className="w-3.5 h-3.5 text-amber-400" />
-                <span>Telemetry Simulator</span>
+                <span>Offline / File Replay</span>
               </>
             )}
           </button>
@@ -149,19 +145,6 @@ export const Header: React.FC<HeaderProps> = ({
             title="Python LMU Bridge Setup Instructions"
           >
             <Terminal className="w-4 h-4" />
-          </button>
-
-          {/* Simulator controls trigger */}
-          <button
-            onClick={onToggleSimulatorControls}
-            className={`p-1.5 border rounded-lg transition ${
-              showSimulatorControls
-                ? 'bg-amber-500/20 border-amber-500 text-amber-400'
-                : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
-            }`}
-            title="Toggle Simulator Tweaks Toolbar"
-          >
-            <Sliders className="w-4 h-4" />
           </button>
 
           {/* Audio shift beep toggle */}

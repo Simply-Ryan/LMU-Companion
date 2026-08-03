@@ -54,7 +54,7 @@ import websockets
                 </span>
               ) : (
                 <span className="text-xs bg-amber-500/20 text-amber-400 border border-amber-500/40 px-2.5 py-0.5 rounded-full font-medium">
-                  Disconnected (Simulator Active)
+                  Disconnected (No Live Feed)
                 </span>
               )}
             </h2>

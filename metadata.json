@@ -1,5 +1,5 @@
 {
-  "name": "LMU Telemetry Companion",
+  "name": "LMU Companion",
   "description": "Real-time telemetry, local DuckDB telemetry file analyzer, fuel & virtual energy calculator, tire heat maps, sector deltas, and stint analysis for Le Mans Ultimate.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

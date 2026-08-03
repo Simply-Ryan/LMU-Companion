@@ -92,6 +92,65 @@ export function extractString(row: Record<string, any>, aliases: string[]): stri
   return undefined;
 }
 
+export function extractTrackAndCarInfo(rows: any[]): { track: TrackInfo, car: CarInfo } {
+  if (!rows || rows.length === 0) {
+    return { track: LMU_TRACKS[0], car: LMU_CARS[0] };
+  }
+
+  const firstRow = rows[0];
+  const extractedCarName = extractString(firstRow, ['Vehicle', 'VehicleName', 'Car', 'car_name', 'car', 'vehicle_class']) || 'Ginetta LMP3';
+  const extractedTrackName = extractString(firstRow, ['Track', 'TrackName', 'Circuit', 'track_name', 'circuit_name', 'venue']) || 'Bahrain International Circuit';
+
+  // Check if we have an exact match in the database
+  let matchedCar = LMU_CARS.find(c => c.name.toLowerCase() === extractedCarName.toLowerCase());
+  let matchedTrack = LMU_TRACKS.find(t => t.name.toLowerCase() === extractedTrackName.toLowerCase());
+
+  // Dynamically estimate track length and max RPM from full rows if not matched
+  let estimatedTrackLength = 5412;
+  let estimatedMaxRpm = 7500;
+  
+  if (!matchedTrack || !matchedCar) {
+    let maxDist = 0;
+    let maxR = 0;
+    for (const r of rows) {
+      const d = extractNumber(r, ['track_distance_m', 'Lap Dist', 'Total Dist', 'distance', 'dist'], 0);
+      if (d > maxDist) maxDist = d;
+      
+      const rp = extractNumber(r, ['engine_rpm', 'Engine RPM', 'rpm', 'RPM'], 0);
+      if (rp > maxR) maxR = rp;
+    }
+    if (maxDist > 1000) estimatedTrackLength = Math.round(maxDist);
+    if (maxR > 1000) estimatedMaxRpm = Math.ceil((maxR + 500) / 100) * 100;
+  }
+
+  const car: CarInfo = matchedCar || {
+    id: 'uploaded-car',
+    name: extractedCarName,
+    class: 'LMP3',
+    manufacturer: 'Custom',
+    fuelTankCapacityLiters: 90,
+    virtualEnergyCapacityMJ: 0,
+    maxRPM: estimatedMaxRpm,
+    shiftRPM: Math.round(estimatedMaxRpm * 0.95),
+    hasHybridSystem: false,
+  };
+
+  const track: TrackInfo = matchedTrack || {
+    id: 'uploaded-track',
+    name: extractedTrackName,
+    country: 'Custom',
+    lengthMeters: estimatedTrackLength,
+    sectors: [
+      { number: 1, name: 'S1', distanceMeter: Math.round(estimatedTrackLength * 0.33), idealTimeSeconds: 30 },
+      { number: 2, name: 'S2', distanceMeter: Math.round(estimatedTrackLength * 0.66), idealTimeSeconds: 30 },
+      { number: 3, name: 'S3', distanceMeter: estimatedTrackLength, idealTimeSeconds: 30 },
+    ],
+    typicalLapTimeSeconds: 120,
+  };
+
+  return { track, car };
+}
+
 // Convert a single DB row to a complete TelemetryFrame
 export function rowToTelemetryFrame(
   row: Record<string, any>,
@@ -100,33 +159,9 @@ export function rowToTelemetryFrame(
   customTrack?: TrackInfo,
   customCar?: CarInfo
 ): TelemetryFrame {
-  const extractedCarName = extractString(row, ['Vehicle', 'VehicleName', 'Car', 'car_name', 'car', 'vehicle_class']) || 'Ginetta LMP3';
-  const extractedTrackName = extractString(row, ['Track', 'TrackName', 'Circuit', 'track_name', 'circuit_name', 'venue']) || 'Bahrain International Circuit';
-
-  const car: CarInfo = customCar || (extractedCarName.toLowerCase().includes('ginetta') || extractedCarName.toLowerCase().includes('lmp3') ? LMU_CARS[0] : {
-    id: 'uploaded-car',
-    name: extractedCarName,
-    class: 'LMP3',
-    manufacturer: 'Ginetta',
-    fuelTankCapacityLiters: 90,
-    virtualEnergyCapacityMJ: 0,
-    maxRPM: 7500,
-    shiftRPM: 7200,
-    hasHybridSystem: false,
-  });
-
-  const track: TrackInfo = customTrack || (extractedTrackName.toLowerCase().includes('bahrain') ? LMU_TRACKS[0] : {
-    id: 'uploaded-track',
-    name: extractedTrackName,
-    country: 'Bahrain',
-    lengthMeters: 5412,
-    sectors: [
-      { number: 1, name: 'S1', distanceMeter: 1800, idealTimeSeconds: 30.5 },
-      { number: 2, name: 'S2', distanceMeter: 3800, idealTimeSeconds: 48.0 },
-      { number: 3, name: 'S3', distanceMeter: 5412, idealTimeSeconds: 36.8 },
-    ],
-    typicalLapTimeSeconds: 115.309,
-  });
+  // If track/car are passed from higher scope, use them directly to save CPU
+  const car: CarInfo = customCar || LMU_CARS[0];
+  const track: TrackInfo = customTrack || LMU_TRACKS[0];
 
   // Dynamics: raw speed is in km/h directly for DuckDB LMU exports
   const rawSpeed = extractNumber(row, ['speed_kmh', 'Ground Speed', 'GPS Speed', 'Wheel Speed', 'speed', 'vcar', 'velocity', 'Speed'], 0);
@@ -264,8 +299,8 @@ export function rowToTelemetryFrame(
     electronics,
     ambientTempC: extractNumber(row, ['Ambient Temperature', 'ambient_temp_c'], 22.5),
     trackTempC: extractNumber(row, ['Track Temperature', 'track_temp_c'], 31.0),
-    weatherCondition: 'DRY',
-    trackGripPercent: 98,
+    weatherCondition: extractNumber(row, ['rain_intensity', 'Rain Intensity'], 0) > 0.5 ? 'HEAVY_RAIN' : extractNumber(row, ['rain_intensity', 'Rain Intensity'], 0) > 0.1 ? 'WET' : extractNumber(row, ['rain_intensity', 'Rain Intensity'], 0) > 0 ? 'DAMP' : 'DRY',
+    trackGripPercent: extractNumber(row, ['Track Grip', 'track_grip', 'rain_intensity'], 0) > 0 ? 80 : 98,
     inPitLane: Boolean(extractNumber(row, ['In Pits', 'in_pit_lane'], 0)),
     pitLimiterActive: Boolean(extractNumber(row, ['Speed Limiter', 'pit_limiter_active'], 0)),
     yellowFlagActive: Boolean(extractNumber(row, ['Yellow Flag State', 'yellow_flag_active'], 0)),

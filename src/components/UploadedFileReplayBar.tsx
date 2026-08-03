@@ -124,7 +124,7 @@ export const UploadedFileReplayBar: React.FC<UploadedFileReplayBarProps> = ({
           <button
             onClick={onClearFile}
             className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white px-2.5 py-1.5 rounded-lg border border-slate-700 transition"
-            title="Switch to Live Simulator feed (File remains saved in memory)"
+            title="Clear File and listen to Live Python Bridge"
           >
             Switch to Live
           </button>

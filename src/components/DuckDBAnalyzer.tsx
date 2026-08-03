@@ -37,11 +37,20 @@ import {
 } from 'recharts';
 import { getDuckDB, registerDuckDBFile, unregisterDuckDBFile, dropTableIfExists, resetDuckDBSession, resetDuckDBCatalogContext, executeDuckDBQuery } from '../lib/duckdb';
 import { generateLMUSampleTelemetry, SAMPLE_PRESETS, SampleTelemetryPoint } from '../data/duckdbSamples';
-import { TelemetryFrame } from '../types';
-import { rowToTelemetryFrame } from '../lib/telemetryParser';
+import { TelemetryFrame, LapRecord, TrackInfo, CarInfo } from '../types';
+import { rowToTelemetryFrame, parseRowsToLapRecords, parseRowsToTracePoints, extractTrackAndCarInfo } from '../lib/telemetryParser';
 
 interface DuckDBAnalyzerProps {
-  onLoadTelemetryToHUD?: (frames: TelemetryFrame[], fileName?: string, rows?: any[]) => void;
+  onLoadTelemetryToHUD?: (
+    tableName: string,
+    fileName: string,
+    totalRows: number,
+    laps: number[],
+    lapRecords: LapRecord[],
+    traceData: any[],
+    track: TrackInfo,
+    car: CarInfo
+  ) => void;
 }
 
 interface LoadedTableInfo {
@@ -225,18 +234,32 @@ export const DuckDBAnalyzer: React.FC<DuckDBAnalyzerProps> = ({ onLoadTelemetryT
     try {
       const cntRes = await executeDuckDBQuery(`SELECT COUNT(*) as cnt FROM "${tableName}";`);
       const totalCount = Number(cntRes.rows[0]?.cnt || 0);
-      const step = totalCount > 25000 ? 2 : 1;
+      const step = totalCount > 10000 ? Math.ceil(totalCount / 10000) : 1;
 
-      const fullRes = await executeDuckDBQuery(
-        step > 1
-          ? `SELECT * FROM "${tableName}" WHERE (sample_id % ${step}) = 0 ORDER BY sample_id;`
-          : `SELECT * FROM "${tableName}" ORDER BY sample_id;`
+      // Pull downsampled data for charts
+      const traceRes = await executeDuckDBQuery(
+        `SELECT * FROM "${tableName}" WHERE (sample_id % ${step}) = 0 ORDER BY sample_id;`
       );
+      
+      // Pull all data to compute lap records (will be garbage collected after parse)
+      const fullRes = await executeDuckDBQuery(`SELECT * FROM "${tableName}" ORDER BY sample_id;`);
+      
       if (fullRes.rows && fullRes.rows.length > 0) {
-        const frames = fullRes.rows.map((row, idx) =>
-          rowToTelemetryFrame(row, idx, fullRes.rows.length)
+        const { track, car } = extractTrackAndCarInfo(fullRes.rows);
+        const lapRecords = parseRowsToLapRecords(fullRes.rows);
+        const traceData = parseRowsToTracePoints(traceRes.rows);
+        const laps = Array.from(new Set(fullRes.rows.map((r: any) => r.lap_number || r.Lap || r.lap || 1))).map(Number).sort((a, b) => a - b);
+        
+        onLoadTelemetryToHUD(
+          tableName,
+          currentFileName || tableName,
+          totalCount,
+          laps,
+          lapRecords,
+          traceData,
+          track,
+          car
         );
-        onLoadTelemetryToHUD(frames, currentFileName || tableName, fullRes.rows);
       }
     } catch (err) {
       console.warn('Failed syncing telemetry to App:', err);
@@ -444,15 +467,6 @@ export const DuckDBAnalyzer: React.FC<DuckDBAnalyzerProps> = ({ onLoadTelemetryT
       throw new Error('No readable user tables found in the uploaded DuckDB database file.');
     }
 
-    // Copy all user tables from uploaded_db into memory
-    for (const tName of tablesToCopy) {
-      try {
-        await executeDuckDBQuery(`CREATE OR REPLACE TABLE "${tName}" AS SELECT * FROM uploaded_db."${tName}";`);
-      } catch (e) {
-        console.warn(`Failed copying table ${tName}:`, e);
-      }
-    }
-
     // Check if lmu_telemetry exists directly
     if (!tablesToCopy.includes('lmu_telemetry')) {
       const baseTable = tablesToCopy.find(t =>
@@ -461,7 +475,7 @@ export const DuckDBAnalyzer: React.FC<DuckDBAnalyzerProps> = ({ onLoadTelemetryT
 
       let isMultiChannel = false;
       try {
-        const baseSchema = await executeDuckDBQuery(`DESCRIBE uploaded_db."${baseTable}";`);
+        const baseSchema = await executeDuckDBQuery(`DESCRIBE uploaded_db.main."${baseTable}";`);
         const cols = baseSchema.rows.map(c => String(c.column_name || c.Field || Object.values(c)[0]).toLowerCase());
         if (cols.includes('value') || cols.includes('value1') || tablesToCopy.includes('Throttle Pos') || tablesToCopy.includes('Ground Speed')) {
           isMultiChannel = true;
@@ -470,25 +484,30 @@ export const DuckDBAnalyzer: React.FC<DuckDBAnalyzerProps> = ({ onLoadTelemetryT
 
       if (isMultiChannel && baseTable) {
         try {
+          const hasTable = (tblName: string) => tablesToCopy.some(t => t.toLowerCase() === tblName.toLowerCase());
+
           // Find start timestamp
           let startTs = 0;
-          try {
-            const tsRes = await executeDuckDBQuery(`SELECT MIN(ts) as min_ts FROM uploaded_db."Lap";`);
-            startTs = Number(tsRes.rows[0]?.min_ts || 0);
-          } catch {
+          if (hasTable('Lap')) {
             try {
-              const tsRes = await executeDuckDBQuery(`SELECT MIN(ts) as min_ts FROM uploaded_db."Gear";`);
+              const tsRes = await executeDuckDBQuery(`SELECT MIN(ts) as min_ts FROM uploaded_db.main."Lap";`);
+              startTs = Number(tsRes.rows[0]?.min_ts || 0);
+            } catch {}
+          } else if (hasTable('Gear')) {
+            try {
+              const tsRes = await executeDuckDBQuery(`SELECT MIN(ts) as min_ts FROM uploaded_db.main."Gear";`);
               startTs = Number(tsRes.rows[0]?.min_ts || 0);
             } catch {}
           }
 
-          const cntRes = await executeDuckDBQuery(`SELECT COUNT(*) as cnt FROM uploaded_db."${baseTable}";`);
+          const cntRes = await executeDuckDBQuery(`SELECT COUNT(*) as cnt FROM uploaded_db.main."${baseTable}";`);
           const baseCount = Number(cntRes.rows[0]?.cnt || 1);
 
           // Get counts for each channel table safely
           const getTableCount = async (tblName: string) => {
+            if (!hasTable(tblName)) return 1;
             try {
-              const r = await executeDuckDBQuery(`SELECT COUNT(*) as cnt FROM uploaded_db."${tblName}";`);
+              const r = await executeDuckDBQuery(`SELECT COUNT(*) as cnt FROM uploaded_db.main."${tblName}";`);
               return Number(r.rows[0]?.cnt || 1);
             } catch {
               return 1;
@@ -503,6 +522,24 @@ export const DuckDBAnalyzer: React.FC<DuckDBAnalyzerProps> = ({ onLoadTelemetryT
           const fuelCnt = await getTableCount('Fuel Level');
           const gLatCnt = await getTableCount('G Force Lat');
           const gLongCnt = await getTableCount('G Force Long');
+          const ambTempCnt = await getTableCount('Ambient Temp');
+          const trackTempCnt = await getTableCount('Track Temp');
+          const rainCnt = await getTableCount('Rain Intensity');
+
+          const rpmSql = hasTable('Engine RPM') ? `SELECT row_number() OVER () - 1 AS idx, value AS engine_rpm FROM uploaded_db.main."Engine RPM"` : `SELECT 0 AS idx, 0 AS engine_rpm WHERE 1=0`;
+          const steeringSql = hasTable('Steering Pos') ? `SELECT row_number() OVER () - 1 AS idx, value AS steering_pct FROM uploaded_db.main."Steering Pos"` : `SELECT 0 AS idx, 0 AS steering_pct WHERE 1=0`;
+          const throttleSql = hasTable('Throttle Pos') ? `SELECT row_number() OVER () - 1 AS idx, value AS throttle_pct FROM uploaded_db.main."Throttle Pos"` : `SELECT 0 AS idx, 0 AS throttle_pct WHERE 1=0`;
+          const brakeSql = hasTable('Brake Pos') ? `SELECT row_number() OVER () - 1 AS idx, value AS brake_pct FROM uploaded_db.main."Brake Pos"` : `SELECT 0 AS idx, 0 AS brake_pct WHERE 1=0`;
+          const lapDistSql = hasTable('Lap Dist') ? `SELECT row_number() OVER () - 1 AS idx, value AS track_distance_m FROM uploaded_db.main."Lap Dist"` : `SELECT 0 AS idx, 0 AS track_distance_m WHERE 1=0`;
+          const fuelSql = hasTable('Fuel Level') ? `SELECT row_number() OVER () - 1 AS idx, value AS fuel_remaining_l FROM uploaded_db.main."Fuel Level"` : `SELECT 0 AS idx, 0 AS fuel_remaining_l WHERE 1=0`;
+          const gLatSql = hasTable('G Force Lat') ? `SELECT row_number() OVER () - 1 AS idx, value AS lat_accel_g FROM uploaded_db.main."G Force Lat"` : `SELECT 0 AS idx, 0 AS lat_accel_g WHERE 1=0`;
+          const gLongSql = hasTable('G Force Long') ? `SELECT row_number() OVER () - 1 AS idx, value AS long_accel_g FROM uploaded_db.main."G Force Long"` : `SELECT 0 AS idx, 0 AS long_accel_g WHERE 1=0`;
+          const ambTempSql = hasTable('Ambient Temp') ? `SELECT row_number() OVER () - 1 AS idx, value AS ambient_temp_c FROM uploaded_db.main."Ambient Temp"` : `SELECT 0 AS idx, 22.5 AS ambient_temp_c WHERE 1=0`;
+          const trackTempSql = hasTable('Track Temp') ? `SELECT row_number() OVER () - 1 AS idx, value AS track_temp_c FROM uploaded_db.main."Track Temp"` : `SELECT 0 AS idx, 31.0 AS track_temp_c WHERE 1=0`;
+          const rainSql = hasTable('Rain Intensity') ? `SELECT row_number() OVER () - 1 AS idx, value AS rain_intensity FROM uploaded_db.main."Rain Intensity"` : `SELECT 0 AS idx, 0 AS rain_intensity WHERE 1=0`;
+          
+          const gearSql = hasTable('Gear') ? `SELECT ts, value AS gear FROM uploaded_db.main."Gear"` : `SELECT 0 AS ts, 0 AS gear WHERE 1=0`;
+          const lapSql = hasTable('Lap') ? `SELECT ts, value AS lap_number FROM uploaded_db.main."Lap"` : `SELECT 0 AS ts, 1 AS lap_number WHERE 1=0`;
 
           const fullSql = `
             CREATE OR REPLACE TABLE lmu_telemetry AS
@@ -512,38 +549,21 @@ export const DuckDBAnalyzer: React.FC<DuckDBAnalyzerProps> = ({ onLoadTelemetryT
                 ${startTs} + (row_number() OVER () - 1) * 0.01 AS ts,
                 (row_number() OVER () - 1) * 0.01 AS current_lap_time_seconds,
                 COALESCE(value, 0) AS speed_kmh
-              FROM uploaded_db."${baseTable}"
+              FROM uploaded_db.main."${baseTable}"
             ),
-            rpm_t AS (
-              SELECT row_number() OVER () - 1 AS idx, value AS engine_rpm FROM uploaded_db."Engine RPM"
-            ),
-            steering_t AS (
-              SELECT row_number() OVER () - 1 AS idx, value AS steering_pct FROM uploaded_db."Steering Pos"
-            ),
-            throttle_t AS (
-              SELECT row_number() OVER () - 1 AS idx, value AS throttle_pct FROM uploaded_db."Throttle Pos"
-            ),
-            brake_t AS (
-              SELECT row_number() OVER () - 1 AS idx, value AS brake_pct FROM uploaded_db."Brake Pos"
-            ),
-            lap_dist_t AS (
-              SELECT row_number() OVER () - 1 AS idx, value AS track_distance_m FROM uploaded_db."Lap Dist"
-            ),
-            fuel_t AS (
-              SELECT row_number() OVER () - 1 AS idx, value AS fuel_remaining_l FROM uploaded_db."Fuel Level"
-            ),
-            g_lat_t AS (
-              SELECT row_number() OVER () - 1 AS idx, value AS lat_accel_g FROM uploaded_db."G Force Lat"
-            ),
-            g_long_t AS (
-              SELECT row_number() OVER () - 1 AS idx, value AS long_accel_g FROM uploaded_db."G Force Long"
-            ),
-            gear_asof AS (
-              SELECT ts, value AS gear FROM uploaded_db."Gear"
-            ),
-            lap_asof AS (
-              SELECT ts, value AS lap_number FROM uploaded_db."Lap"
-            )
+            rpm_t AS (${rpmSql}),
+            steering_t AS (${steeringSql}),
+            throttle_t AS (${throttleSql}),
+            brake_t AS (${brakeSql}),
+            lap_dist_t AS (${lapDistSql}),
+            fuel_t AS (${fuelSql}),
+            g_lat_t AS (${gLatSql}),
+            g_long_t AS (${gLongSql}),
+            amb_t AS (${ambTempSql}),
+            track_t AS (${trackTempSql}),
+            rain_t AS (${rainSql}),
+            gear_asof AS (${gearSql}),
+            lap_asof AS (${lapSql})
             SELECT
               b.idx + 1 AS sample_id,
               b.idx + 1 AS id,
@@ -558,6 +578,9 @@ export const DuckDBAnalyzer: React.FC<DuckDBAnalyzerProps> = ({ onLoadTelemetryT
               ROUND(COALESCE(fuel_t.fuel_remaining_l, 0), 2) AS fuel_remaining_l,
               ROUND(COALESCE(g_lat_t.lat_accel_g, 0), 3) AS lat_accel_g,
               ROUND(COALESCE(g_long_t.long_accel_g, 0), 3) AS long_accel_g,
+              ROUND(COALESCE(amb_t.ambient_temp_c, 22.5), 1) AS ambient_temp_c,
+              ROUND(COALESCE(track_t.track_temp_c, 31.0), 1) AS track_temp_c,
+              ROUND(COALESCE(rain_t.rain_intensity, 0), 2) AS rain_intensity,
               COALESCE(g.gear, 0) AS gear,
               COALESCE(l.lap_number, 1) AS lap_number
             FROM base b
@@ -569,6 +592,9 @@ export const DuckDBAnalyzer: React.FC<DuckDBAnalyzerProps> = ({ onLoadTelemetryT
             LEFT JOIN fuel_t ON CAST(FLOOR(b.idx * ${fuelCnt} / ${baseCount}) AS BIGINT) = fuel_t.idx
             LEFT JOIN g_lat_t ON CAST(FLOOR(b.idx * ${gLatCnt} / ${baseCount}) AS BIGINT) = g_lat_t.idx
             LEFT JOIN g_long_t ON CAST(FLOOR(b.idx * ${gLongCnt} / ${baseCount}) AS BIGINT) = g_long_t.idx
+            LEFT JOIN amb_t ON CAST(FLOOR(b.idx * ${ambTempCnt} / ${baseCount}) AS BIGINT) = amb_t.idx
+            LEFT JOIN track_t ON CAST(FLOOR(b.idx * ${trackTempCnt} / ${baseCount}) AS BIGINT) = track_t.idx
+            LEFT JOIN rain_t ON CAST(FLOOR(b.idx * ${rainCnt} / ${baseCount}) AS BIGINT) = rain_t.idx
             ASOF LEFT JOIN gear_asof g ON b.ts >= g.ts
             ASOF LEFT JOIN lap_asof l ON b.ts >= l.ts;
           `;
@@ -576,10 +602,10 @@ export const DuckDBAnalyzer: React.FC<DuckDBAnalyzerProps> = ({ onLoadTelemetryT
           await executeDuckDBQuery(fullSql);
         } catch (err) {
           console.warn('Multi-channel DuckDB parsing failed, falling back to alias:', err);
-          await executeDuckDBQuery(`CREATE OR REPLACE TABLE lmu_telemetry AS SELECT * FROM uploaded_db."${tablesToCopy[0]}";`);
+          await executeDuckDBQuery(`CREATE OR REPLACE TABLE lmu_telemetry AS SELECT * FROM uploaded_db.main."${tablesToCopy[0]}";`);
         }
       } else {
-        await executeDuckDBQuery(`CREATE OR REPLACE TABLE lmu_telemetry AS SELECT * FROM uploaded_db."${tablesToCopy[0]}";`);
+        await executeDuckDBQuery(`CREATE OR REPLACE TABLE lmu_telemetry AS SELECT * FROM uploaded_db.main."${tablesToCopy[0]}";`);
       }
     }
 

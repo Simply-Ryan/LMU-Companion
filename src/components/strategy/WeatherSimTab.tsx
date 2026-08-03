@@ -36,7 +36,7 @@ export const WeatherSimTab: React.FC<WeatherSimTabProps> = ({
             </div>
             <div>
               <h3 className="font-bold text-white text-base">
-                Weather & Track Surface Condition Simulator
+                Weather & Track Surface Condition Modeling
               </h3>
               <p className="text-xs text-slate-400">
                 Model track temperature shifts, rubber evolution, and rain intensity on lap times & consumption

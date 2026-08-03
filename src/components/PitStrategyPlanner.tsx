@@ -28,7 +28,6 @@ import { TradeoffTab } from './strategy/TradeoffTab';
 interface PitStrategyPlannerProps {
   telemetry: TelemetryFrame;
   uploadedLaps?: LapRecord[];
-  uploadedFrames?: TelemetryFrame[];
 }
 
 export interface PhysicalTireSet {
@@ -44,7 +43,6 @@ export interface PhysicalTireSet {
 export const PitStrategyPlanner: React.FC<PitStrategyPlannerProps> = ({
   telemetry,
   uploadedLaps,
-  uploadedFrames,
 }) => {
   // Navigation Tabs inside Strategy Planner
   const [activeTab, setActiveTab] = useState<'schedule' | 'weather' | 'tireSets' | 'tradeoff' | 'inputs'>('schedule');
@@ -141,17 +139,6 @@ export const PitStrategyPlanner: React.FC<PitStrategyPlannerProps> = ({
           avgVE = ves.reduce((sum, l) => sum + l.virtualEnergyUsedMJ, 0) / ves.length;
         }
       }
-    } else if (uploadedFrames && uploadedFrames.length > 50) {
-      const validFrames = uploadedFrames;
-      const laps = Array.from(new Set(validFrames.map((f) => f.lapNumber)));
-      extractedLapCount = laps.length;
-
-      // Estimate avg lap time
-      const maxLapTime = Math.max(...validFrames.map((f) => f.currentLapTimeSeconds));
-      if (maxLapTime > 30) avgLap = maxLapTime;
-
-      avgFuel = telemetry.fuelAvgPerLapLiters || 2.85;
-      avgVE = telemetry.virtualEnergyAvgPerLapMJ || 28.5;
     }
 
     if (extractedLapCount > 0) {
@@ -344,13 +331,13 @@ export const PitStrategyPlanner: React.FC<PitStrategyPlannerProps> = ({
         </div>
 
         {/* Telemetry Sync & Empirical Analysis Banner */}
-        {(uploadedLaps || uploadedFrames) && (
+        {uploadedLaps && (
           <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
             <div className="flex items-center gap-2 text-amber-300 font-bold">
               <FileSpreadsheet className="w-4 h-4 text-amber-400 flex-shrink-0" />
               <span>Active Telemetry Dataset Available:</span>
               <span className="text-white font-mono font-semibold">
-                {uploadedLaps ? `${uploadedLaps.length} Lap Records` : `${uploadedFrames?.length || 0} Frames`}
+                {`${uploadedLaps.length} Lap Records`}
               </span>
             </div>
             <button
@@ -558,7 +545,7 @@ export const PitStrategyPlanner: React.FC<PitStrategyPlannerProps> = ({
         />
       )}
 
-      {/* TAB 3: WEATHER & TRACK SIMULATOR */}
+      {/* TAB 3: WEATHER & TRACK MODELING */}
       {activeTab === 'weather' && (
         <WeatherSimTab
           rainIntensityMm={rainIntensityMm}

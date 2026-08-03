@@ -62,14 +62,15 @@ export interface VehicleElectronics {
 
 export interface UploadedFileState {
   fileName: string;
+  tableName: string; // The duckdb table name
   totalRows: number;
   availableLaps: number[];
   selectedLap: number;
   currentSampleIndex: number;
   isPlaying: boolean;
   playbackSpeed: number;
-  frames: TelemetryFrame[];
-  traceData: any[];
+  frameBuffer: TelemetryFrame[]; // current and next 10 frames
+  traceData: any[]; // downsampled for charts
   lapRecords: LapRecord[];
 }
 
@@ -220,7 +221,7 @@ export interface TelemetryFrame {
   highTireTempWarning: boolean;
 }
 
-export type ConnectionSource = 'SIMULATOR' | 'PYTHON_BRIDGE' | 'REPLAY';
+export type ConnectionSource = 'NO_DATA' | 'PYTHON_BRIDGE' | 'REPLAY';
 
 export interface PitStrategyCalculation {
   targetStintLaps: number;

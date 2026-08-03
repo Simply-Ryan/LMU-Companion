@@ -4,7 +4,6 @@ import { Flag, Navigation, Activity, Gauge, Zap, Disc, ArrowRightLeft } from 'lu
 
 interface TrackMap2DProps {
   telemetry: TelemetryFrame;
-  frames?: TelemetryFrame[];
   traceData?: any[];
   className?: string;
   showInputsOverlay?: boolean;
@@ -20,7 +19,6 @@ interface Point2D {
 
 export const TrackMap2D: React.FC<TrackMap2DProps> = ({
   telemetry,
-  frames = [],
   traceData = [],
   className = '',
   showInputsOverlay = true,
@@ -29,30 +27,7 @@ export const TrackMap2D: React.FC<TrackMap2DProps> = ({
 
   // Extract or generate 2D track points
   const trackPathPoints: Point2D[] = useMemo(() => {
-    // 1. Try extracting actual coordinate points from loaded frames if available
-    if (frames && frames.length > 5) {
-      const extracted: Point2D[] = [];
-      let hasValidCoords = false;
-
-      frames.forEach((f, idx) => {
-        if (f.worldPosition && typeof f.worldPosition.x === 'number' && typeof f.worldPosition.y === 'number') {
-          hasValidCoords = true;
-          extracted.push({
-            x: f.worldPosition.x,
-            y: f.worldPosition.y,
-            distMeters: f.trackDistanceMeters,
-            speedKmh: f.speedKmh,
-            sector: f.currentSector,
-          });
-        }
-      });
-
-      if (hasValidCoords && extracted.length > 5) {
-        return extracted;
-      }
-    }
-
-    // 2. Generate smooth 2D procedural circuit outline tailored to track length & sector geometry
+    // 1. Generate smooth 2D procedural circuit outline tailored to track length & sector geometry
     const numPoints = 120;
     const points: Point2D[] = [];
     const trackLen = track.lengthMeters || 13626;
@@ -86,14 +61,14 @@ export const TrackMap2D: React.FC<TrackMap2DProps> = ({
     }
 
     return points;
-  }, [frames, track]);
+  }, [track]);
 
   // Compute bounding box and normalize points into SVG viewBox (800 x 500)
   const svgWidth = 800;
   const svgHeight = 480;
   const padding = 50;
 
-  // Static Map Geometry memoization - ONLY recalculates when track or frames change, NOT on 60Hz telemetry ticks
+  // Static Map Geometry memoization - ONLY recalculates when track changes, NOT on 60Hz telemetry ticks
   const staticMapData = useMemo(() => {
     if (trackPathPoints.length === 0) {
       return {
