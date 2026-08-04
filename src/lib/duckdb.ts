@@ -161,7 +161,7 @@ export async function dropTableIfExists(tableName: string): Promise<void> {
 }
 
 /**
- * Ensures DuckDB WASM session is reset to default 'memory.main' database context,
+ * Ensures DuckDB WASM session is reset to default in-memory database context,
  * detaching any attached user databases to prevent catalog resolution errors.
  */
 export async function resetDuckDBCatalogContext(): Promise<void> {
@@ -174,15 +174,35 @@ export async function resetDuckDBCatalogContext(): Promise<void> {
     // ignore
   }
 
-  // 2. Switch back to default memory catalog safely
+  // 2. Discover available databases and switch away from uploaded_db
   try {
-    await conn.query('USE memory.main;');
-  } catch {
-    try {
-      await conn.query('USE memory;');
-    } catch {
-      // ignore
+    const dbsResult = await conn.query('SELECT database_name FROM duckdb_databases();');
+    const dbs: string[] = [];
+    for (let i = 0; i < dbsResult.numRows; i++) {
+      const name = String(dbsResult.getChild('database_name')?.get(i) || '');
+      if (name && name !== 'uploaded_db') {
+        dbs.push(name);
+      }
     }
+
+    const candidates = ['memory', 'system', 'temp', 'main', ...dbs];
+    for (const cand of candidates) {
+      try {
+        await conn.query(`USE "${cand}";`);
+        break;
+      } catch {
+        try {
+          await conn.query(`USE ${cand};`);
+          break;
+        } catch {
+          // ignore
+        }
+      }
+    }
+  } catch {
+    try { await conn.query('USE memory;'); } catch {}
+    try { await conn.query('USE system;'); } catch {}
+    try { await conn.query('USE main;'); } catch {}
   }
 
   // 3. Detach uploaded_db if attached previously
@@ -196,15 +216,21 @@ export async function resetDuckDBCatalogContext(): Promise<void> {
     }
   }
 
-  // 4. Re-affirm memory.main catalog context
-  try {
-    await conn.query('USE memory.main;');
-  } catch {
+  // 4. Re-affirm memory/main catalog context and search path
+  const switchQueries = ['USE memory;', 'USE system;', 'USE main;'];
+  for (const q of switchQueries) {
     try {
-      await conn.query('USE memory;');
+      await conn.query(q);
+      break;
     } catch {
       // ignore
     }
+  }
+
+  try {
+    await conn.query("SET search_path = 'main, memory.main, system.main';");
+  } catch {
+    // ignore
   }
 }
 

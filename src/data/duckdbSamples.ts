@@ -114,7 +114,7 @@ export const SAMPLE_PRESETS = [
     car: 'Ginetta LMP3',
     track: 'Bahrain International Circuit',
     filename: 'Ginetta-LMP3-1_55.309-Ryan.duckdb',
-    isRealFile: true,
+    isRealFile: false,
     fileUrl: '/samples/Ginetta-LMP3-1_55.309-Ryan.duckdb',
     laps: 4,
   },

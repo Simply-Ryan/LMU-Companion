@@ -27,21 +27,37 @@ export const TrackMap2D: React.FC<TrackMap2DProps> = ({
 
   // Extract or generate 2D track points
   const trackPathPoints: Point2D[] = useMemo(() => {
-    // 1. Generate smooth 2D procedural circuit outline tailored to track length & sector geometry
-    const numPoints = 120;
     const points: Point2D[] = [];
+
+    // Check if we have valid traceData with world coords
+    const hasWorldCoords = traceData.length > 10 && traceData.some(p => !isNaN(p.worldX) && !isNaN(p.worldY));
+
+    if (hasWorldCoords) {
+      traceData.forEach(p => {
+        if (!isNaN(p.worldX) && !isNaN(p.worldY)) {
+          points.push({
+            x: p.worldX,
+            y: p.worldY,
+            distMeters: p.distanceMeters,
+            sector: p.sector || 1,
+            speedKmh: p.speedCurrent,
+          });
+        }
+      });
+      return points;
+    }
+
+    // Fallback: Generate smooth 2D procedural circuit outline
+    const numPoints = 120;
     const trackLen = track.lengthMeters || 13626;
 
-    // Use a classic circuit path parametric formula (resembles Spa/Le Mans endurance style layout)
     for (let i = 0; i <= numPoints; i++) {
       const t = (i / numPoints) * 2 * Math.PI;
       const dist = (i / numPoints) * trackLen;
 
-      // Parametric shape with turns and straights
       const rx = 350 * Math.cos(t) + 120 * Math.cos(2 * t) - 40 * Math.sin(3 * t);
       const ry = 220 * Math.sin(t) + 90 * Math.sin(2 * t) + 30 * Math.cos(3 * t);
 
-      // Determine sector from distance
       let sector: number = 1;
       if (track.sectors && track.sectors.length >= 3) {
         if (dist > track.sectors[1].distanceMeter) sector = 3;
@@ -61,7 +77,7 @@ export const TrackMap2D: React.FC<TrackMap2DProps> = ({
     }
 
     return points;
-  }, [track]);
+  }, [track, traceData]);
 
   // Compute bounding box and normalize points into SVG viewBox (800 x 500)
   const svgWidth = 800;
@@ -89,6 +105,7 @@ export const TrackMap2D: React.FC<TrackMap2DProps> = ({
     let minY = Infinity;
     let maxY = -Infinity;
 
+    // First pass to determine bounds
     trackPathPoints.forEach((p) => {
       if (p.x < minX) minX = p.x;
       if (p.x > maxX) maxX = p.x;
@@ -96,7 +113,21 @@ export const TrackMap2D: React.FC<TrackMap2DProps> = ({
       if (p.y > maxY) maxY = p.y;
     });
 
-    const rangeX = maxX - minX || 1;
+    const isGeographic = (maxX - minX < 2) && (maxY - minY < 2) && (Math.abs(minY) <= 180) && (Math.abs(maxY) <= 180);
+    const midY = (minY + maxY) / 2;
+    const aspectCorrection = isGeographic ? Math.cos((midY * Math.PI) / 180) : 1;
+
+    let adjMinX = Infinity;
+    let adjMaxX = -Infinity;
+
+    const adjustedPoints = trackPathPoints.map(p => {
+      const adjX = isGeographic ? p.x * aspectCorrection : p.x;
+      if (adjX < adjMinX) adjMinX = adjX;
+      if (adjX > adjMaxX) adjMaxX = adjX;
+      return { ...p, adjX };
+    });
+
+    const rangeX = adjMaxX - adjMinX || 1;
     const rangeY = maxY - minY || 1;
 
     // Scale to fit within SVG padding
@@ -107,9 +138,9 @@ export const TrackMap2D: React.FC<TrackMap2DProps> = ({
     const offsetX = padding + (usableW - rangeX * scale) / 2;
     const offsetY = padding + (usableH - rangeY * scale) / 2;
 
-    const normalized = trackPathPoints.map((p) => ({
+    const normalized = adjustedPoints.map((p) => ({
       ...p,
-      svgX: offsetX + (p.x - minX) * scale,
+      svgX: offsetX + (p.adjX - adjMinX) * scale,
       svgY: offsetY + (maxY - p.y) * scale, // Flip Y for SVG coords
     }));
 
@@ -122,12 +153,13 @@ export const TrackMap2D: React.FC<TrackMap2DProps> = ({
       normalizedPoints: normalized,
       totalPathString,
       scale,
-      minX,
-      maxX,
+      minX: adjMinX,
+      maxX: adjMaxX,
       minY,
       maxY,
       offsetX,
       offsetY,
+      aspectCorrection
     };
   }, [trackPathPoints]);
 
@@ -139,13 +171,14 @@ export const TrackMap2D: React.FC<TrackMap2DProps> = ({
       return { x: 400, y: 240, angleDeg: 0 };
     }
 
-    const { minX, maxY, scale, offsetX, offsetY } = staticMapData;
+    const { minX, maxY, scale, offsetX, offsetY, aspectCorrection = 1 } = staticMapData;
     let currX = 0;
     let currY = 0;
     let angleDeg = 0;
 
     if (telemetry.worldPosition && typeof telemetry.worldPosition.x === 'number' && typeof telemetry.worldPosition.y === 'number') {
-      currX = offsetX + (telemetry.worldPosition.x - minX) * scale;
+      const adjCarX = telemetry.worldPosition.x * aspectCorrection;
+      currX = offsetX + (adjCarX - minX) * scale;
       currY = offsetY + (maxY - telemetry.worldPosition.y) * scale;
 
       // Estimate heading angle from next frame or progress
@@ -180,10 +213,18 @@ export const TrackMap2D: React.FC<TrackMap2DProps> = ({
     const s2: typeof normalizedPoints = [];
     const s3: typeof normalizedPoints = [];
 
-    normalizedPoints.forEach((p) => {
+    normalizedPoints.forEach((p, index) => {
       if (p.sector === 1) s1.push(p);
       else if (p.sector === 2) s2.push(p);
       else s3.push(p);
+
+      // Add the next point to connect the gap between sectors
+      const nextP = normalizedPoints[index + 1];
+      if (nextP && nextP.sector !== p.sector) {
+        if (p.sector === 1) s1.push(nextP);
+        else if (p.sector === 2) s2.push(nextP);
+        else s3.push(nextP);
+      }
     });
 
     const createPath = (pts: typeof normalizedPoints) => {
@@ -192,9 +233,9 @@ export const TrackMap2D: React.FC<TrackMap2DProps> = ({
     };
 
     return [
-      { sector: 1, name: 'S1', color: '#f59e0b', stroke: '#f59e0b', path: createPath(s1) },
-      { sector: 2, name: 'S2', color: '#38bdf8', stroke: '#38bdf8', path: createPath(s2) },
-      { sector: 3, name: 'S3', color: '#c084fc', stroke: '#c084fc', path: createPath(s3) },
+      { sector: 1, name: 'S1', color: '#ef4444', stroke: '#ef4444', path: createPath(s1) },
+      { sector: 2, name: 'S2', color: '#3b82f6', stroke: '#3b82f6', path: createPath(s2) },
+      { sector: 3, name: 'S3', color: '#eab308', stroke: '#eab308', path: createPath(s3) },
     ];
   }, [normalizedPoints]);
 
@@ -221,14 +262,14 @@ export const TrackMap2D: React.FC<TrackMap2DProps> = ({
 
         {/* Legend Badges */}
         <div className="flex items-center gap-3 text-xs font-mono">
-          <span className="flex items-center gap-1.5 text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded">
-            <span className="w-2.5 h-2.5 rounded-full bg-amber-400"></span> Sector 1
+          <span className="flex items-center gap-1.5 text-red-400 bg-red-500/10 border border-red-500/20 px-2 py-0.5 rounded">
+            <span className="w-2.5 h-2.5 rounded-full bg-red-400"></span> Sector 1
           </span>
-          <span className="flex items-center gap-1.5 text-sky-400 bg-sky-500/10 border border-sky-500/20 px-2 py-0.5 rounded">
-            <span className="w-2.5 h-2.5 rounded-full bg-sky-400"></span> Sector 2
+          <span className="flex items-center gap-1.5 text-blue-400 bg-blue-500/10 border border-blue-500/20 px-2 py-0.5 rounded">
+            <span className="w-2.5 h-2.5 rounded-full bg-blue-400"></span> Sector 2
           </span>
-          <span className="flex items-center gap-1.5 text-purple-400 bg-purple-500/10 border border-purple-500/20 px-2 py-0.5 rounded">
-            <span className="w-2.5 h-2.5 rounded-full bg-purple-400"></span> Sector 3
+          <span className="flex items-center gap-1.5 text-yellow-400 bg-yellow-500/10 border border-yellow-500/20 px-2 py-0.5 rounded">
+            <span className="w-2.5 h-2.5 rounded-full bg-yellow-400"></span> Sector 3
           </span>
         </div>
       </div>

@@ -49,10 +49,10 @@ export function extractTireCorners(row: Record<string, any>, baseAliases: string
   if (!row) return { fl: defaultVal, fr: defaultVal, rl: defaultVal, rr: defaultVal };
 
   // Check explicit 4-corner keys first
-  const flKey = baseAliases.map(a => `${a}_FL`).concat(baseAliases.map(a => `${a}_fl`)).concat(['tire_temp_fl_c', 'tire_press_fl_kpa', 'tire_wear_fl_pct']);
-  const frKey = baseAliases.map(a => `${a}_FR`).concat(baseAliases.map(a => `${a}_fr`)).concat(['tire_temp_fr_c', 'tire_press_fr_kpa', 'tire_wear_fr_pct']);
-  const rlKey = baseAliases.map(a => `${a}_RL`).concat(baseAliases.map(a => `${a}_rl`)).concat(['tire_temp_rl_c', 'tire_press_rl_kpa', 'tire_wear_rl_pct']);
-  const rrKey = baseAliases.map(a => `${a}_RR`).concat(baseAliases.map(a => `${a}_rr`)).concat(['tire_temp_rr_c', 'tire_press_rr_kpa', 'tire_wear_rr_pct']);
+  const flKey = baseAliases.map(a => `${a}_FL`).concat(baseAliases.map(a => `${a}_fl`)).concat(baseAliases.map(a => `${a} FL`)).concat(['tire_temp_fl_c', 'tire_press_fl_kpa', 'tire_wear_fl_pct']);
+  const frKey = baseAliases.map(a => `${a}_FR`).concat(baseAliases.map(a => `${a}_fr`)).concat(baseAliases.map(a => `${a} FR`)).concat(['tire_temp_fr_c', 'tire_press_fr_kpa', 'tire_wear_fr_pct']);
+  const rlKey = baseAliases.map(a => `${a}_RL`).concat(baseAliases.map(a => `${a}_rl`)).concat(baseAliases.map(a => `${a} RL`)).concat(['tire_temp_rl_c', 'tire_press_rl_kpa', 'tire_wear_rl_pct']);
+  const rrKey = baseAliases.map(a => `${a}_RR`).concat(baseAliases.map(a => `${a}_rr`)).concat(baseAliases.map(a => `${a} RR`)).concat(['tire_temp_rr_c', 'tire_press_rr_kpa', 'tire_wear_rr_pct']);
 
   const fl = extractNumber(row, flKey, -1);
   const fr = extractNumber(row, frKey, -1);
@@ -65,7 +65,28 @@ export function extractTireCorners(row: Record<string, any>, baseAliases: string
 
   // Check array/list column
   for (const alias of baseAliases) {
-    const raw = row[alias];
+    let raw = row[alias];
+    const normAlias = alias.toLowerCase().replace(/[\s\-_]+/g, '');
+    const normMap = getNormalizedRowMap(row);
+    if (raw === undefined && normMap[normAlias]) {
+      raw = row[normMap[normAlias]];
+    }
+
+    if (typeof raw === 'string') {
+      try {
+        const parsed = JSON.parse(raw.replace(/'/g, '"'));
+        if (Array.isArray(parsed) && parsed.length >= 4) {
+          return { fl: Number(parsed[0]) || defaultVal, fr: Number(parsed[1]) || defaultVal, rl: Number(parsed[2]) || defaultVal, rr: Number(parsed[3]) || defaultVal };
+        }
+      } catch (e) {
+        // Maybe comma separated?
+        const parts = raw.split(',').map(s => Number(s.trim()));
+        if (parts.length >= 4 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2]) && !isNaN(parts[3])) {
+          return { fl: parts[0], fr: parts[1], rl: parts[2], rr: parts[3] };
+        }
+      }
+    }
+
     if (Array.isArray(raw) && raw.length >= 4) {
       return { fl: Number(raw[0]) || defaultVal, fr: Number(raw[1]) || defaultVal, rl: Number(raw[2]) || defaultVal, rr: Number(raw[3]) || defaultVal };
     }
@@ -92,14 +113,14 @@ export function extractString(row: Record<string, any>, aliases: string[]): stri
   return undefined;
 }
 
-export function extractTrackAndCarInfo(rows: any[]): { track: TrackInfo, car: CarInfo } {
+export function extractTrackAndCarInfo(rows: any[], metadataCarName?: string, metadataTrackName?: string): { track: TrackInfo, car: CarInfo } {
   if (!rows || rows.length === 0) {
     return { track: LMU_TRACKS[0], car: LMU_CARS[0] };
   }
 
   const firstRow = rows[0];
-  const extractedCarName = extractString(firstRow, ['Vehicle', 'VehicleName', 'Car', 'car_name', 'car', 'vehicle_class']) || 'Ginetta LMP3';
-  const extractedTrackName = extractString(firstRow, ['Track', 'TrackName', 'Circuit', 'track_name', 'circuit_name', 'venue']) || 'Bahrain International Circuit';
+  const extractedCarName = metadataCarName || extractString(firstRow, ['Vehicle', 'VehicleName', 'Car', 'car_name', 'car', 'vehicle_class']) || 'Unknown Car';
+  const extractedTrackName = metadataTrackName || extractString(firstRow, ['Track', 'TrackName', 'Circuit', 'track_name', 'circuit_name', 'venue']) || 'Unknown Track';
 
   // Check if we have an exact match in the database
   let matchedCar = LMU_CARS.find(c => c.name.toLowerCase() === extractedCarName.toLowerCase());
@@ -199,14 +220,18 @@ export function rowToTelemetryFrame(
 
   // Timing & Track Position
   const posX = extractNumber(row, ['pos_x', 'Position X', 'GPS Longitude', 'x', 'lon', 'longitude'], NaN);
-  const posY = extractNumber(row, ['pos_y', 'pos_z', 'Position Y', 'Position Z', 'GPS Latitude', 'y', 'z', 'lat', 'latitude'], NaN);
+  const posY = extractNumber(row, ['pos_z', 'Position Z', 'GPS Latitude', 'z', 'lat', 'latitude', 'pos_y', 'Position Y', 'y'], NaN);
   const worldPosition = (!isNaN(posX) && !isNaN(posY)) ? { x: posX, y: posY } : undefined;
 
   const lapNumber = Math.max(1, Math.round(extractNumber(row, ['lap_number', 'Lap', 'lap', 'nlap'], 1)));
   const currentLapTimeSeconds = Number(extractNumber(row, ['current_lap_time_seconds', 'Current LapTime', 'current_lap_time', 'laptime'], 0).toFixed(3));
   const currentSector = Math.min(3, Math.max(1, Math.round(extractNumber(row, ['Current Sector', 'current_sector'], 2)))) as 1 | 2 | 3;
 
-  const trackDistanceMeters = Math.round(extractNumber(row, ['track_distance_m', 'Lap Dist', 'Total Dist', 'distance', 'dist'], (sampleIndex / totalSamples) * track.lengthMeters));
+  let rawDist = extractNumber(row, ['track_distance_m', 'Lap Dist', 'Total Dist', 'distance', 'dist'], (sampleIndex / totalSamples) * track.lengthMeters);
+  if (rawDist > track.lengthMeters * 1.5 && track.lengthMeters > 0) {
+    rawDist = rawDist % track.lengthMeters;
+  }
+  const trackDistanceMeters = Math.round(rawDist);
   const trackProgressPercent = Number(((trackDistanceMeters / track.lengthMeters) * 100).toFixed(1));
 
   const lastLapTimeSeconds = Number(extractNumber(row, ['Last Lap Time', 'last_lap_time_seconds', 'last_lap_time'], 115.309).toFixed(3));
@@ -398,7 +423,13 @@ export function parseRowsToTracePoints(rows: any[]): any[] {
   if (!rows || rows.length === 0) return [];
 
   return rows.map((r, idx) => {
-    const dist = Math.round(extractNumber(r, ['track_distance_m', 'Lap Dist', 'Total Dist', 'distance', 'dist'], idx * 10));
+    let rawDist = extractNumber(r, ['track_distance_m', 'Lap Dist', 'Total Dist', 'distance', 'dist'], idx * 10);
+    // Rough estimate of 13.6km if we don't have track info
+    const trackLen = 13626;
+    if (rawDist > trackLen * 1.5) {
+      rawDist = rawDist % trackLen;
+    }
+    const dist = Math.round(rawDist);
     const speedCurrent = Math.round(extractNumber(r, ['speed_kmh', 'Ground Speed', 'GPS Speed', 'speed', 'vcar'], 0));
 
     let rawThrottle = extractNumber(r, ['throttle_pct', 'Throttle Pos', 'throttle', 'gas'], 0);
@@ -408,6 +439,10 @@ export function parseRowsToTracePoints(rows: any[]): any[] {
     const brakePercent = rawBrake <= 1 ? Math.round(rawBrake * 100) : Math.round(rawBrake);
 
     const rawDelta = extractNumber(r, ['live_delta_sec', 'delta_time', 'delta', 'live_delta'], 0);
+
+    const posX = extractNumber(r, ['pos_x', 'Position X', 'GPS Longitude', 'x', 'lon', 'longitude'], NaN);
+    const posY = extractNumber(r, ['pos_z', 'Position Z', 'GPS Latitude', 'z', 'lat', 'latitude', 'pos_y', 'Position Y', 'y'], NaN);
+    const sector = Math.min(3, Math.max(1, Math.round(extractNumber(r, ['Current Sector', 'current_sector'], 2))));
 
     return {
       distanceMeters: dist,
@@ -420,6 +455,9 @@ export function parseRowsToTracePoints(rows: any[]): any[] {
       rpm: Math.round(extractNumber(r, ['engine_rpm', 'Engine RPM', 'rpm'], 0)),
       fuel: extractNumber(r, ['fuel_remaining_l', 'Fuel Level', 'fuel'], 0),
       energy: extractNumber(r, ['virtual_energy_mj', 'Virtual Energy', 'energy'], 0),
+      worldX: posX,
+      worldY: posY,
+      sector: sector
     };
   });
 }

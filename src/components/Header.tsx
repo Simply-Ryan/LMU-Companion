@@ -1,4 +1,5 @@
 import React from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import { 
   Gauge, 
   Zap, 
@@ -18,7 +19,10 @@ import {
   Flag,
   Database,
   Smartphone,
-  Compass
+  Compass,
+  HelpCircle,
+  Users,
+  UserCircle
 } from 'lucide-react';
 import { TelemetryFrame, ConnectionSource } from '../types';
 import { LMU_CARS, LMU_TRACKS } from '../data/lmuData';
@@ -26,8 +30,8 @@ import { LMU_CARS, LMU_TRACKS } from '../data/lmuData';
 export type TabType = 'hud' | 'telemetry' | 'sectors' | 'energy_tires' | 'mobile_pitwall' | 'coaching_bop';
 
 interface HeaderProps {
-  activeTab: TabType;
-  setActiveTab: (tab: TabType) => void;
+  activeTab?: TabType;
+  setActiveTab?: (tab: TabType) => void;
   telemetry: TelemetryFrame;
   connectionSource: ConnectionSource;
   isPythonBridgeConnected: boolean;
@@ -55,6 +59,8 @@ export const Header: React.FC<HeaderProps> = ({
     const secs = Math.floor(seconds % 60);
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
+  
+  const location = useLocation();
 
   return (
     <header className="bg-slate-950 border-b border-slate-800/80 sticky top-0 z-40 shadow-xl">
@@ -62,12 +68,12 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="max-w-7xl mx-auto px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs border-b border-slate-900">
         {/* Left Brand Identity */}
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 font-black tracking-wider text-base text-white">
+          <Link to="/" className="flex items-center gap-2 font-black tracking-wider text-base text-white hover:opacity-80 transition">
             <span className="bg-gradient-to-r from-amber-500 via-yellow-400 to-red-500 text-slate-950 px-2 py-0.5 rounded font-black text-sm italic">
               LMU
             </span>
             <span className="hidden sm:inline">COMPANION</span>
-          </div>
+          </Link>
 
           <div className="h-4 w-[1px] bg-slate-800 hidden md:block" />
 
@@ -121,6 +127,19 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Right Active Car & Track Badges & Controls */}
         <div className="flex items-center gap-2">
+          
+          <Link to="/help" className="flex items-center gap-1 text-slate-400 hover:text-white transition mr-2">
+            <HelpCircle className="w-4 h-4" /> Help
+          </Link>
+          <Link to="/community" className="flex items-center gap-1 text-slate-400 hover:text-white transition mr-2">
+            <Users className="w-4 h-4" /> Community
+          </Link>
+          <Link to="/account" className="flex items-center gap-1 text-slate-400 hover:text-white transition mr-2">
+            <UserCircle className="w-4 h-4" /> Account
+          </Link>
+
+          <div className="h-4 w-[1px] bg-slate-800 hidden md:block mr-2" />
+
           {/* Active Car Badge */}
           <div className="flex items-center gap-1.5 bg-slate-900/90 border border-slate-800 text-slate-200 text-xs rounded-lg px-2.5 py-1">
             <Car className="w-3.5 h-3.5 text-amber-400" />
@@ -163,78 +182,89 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       {/* Main Navigation Tabs */}
-      <nav className="max-w-7xl mx-auto px-4 flex items-center overflow-x-auto gap-1.5 text-xs font-semibold py-2">
-        <button
-          onClick={() => setActiveTab('hud')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl transition whitespace-nowrap ${
-            activeTab === 'hud'
-              ? 'bg-amber-500 text-slate-950 font-bold shadow-lg shadow-amber-500/20'
-              : 'text-slate-400 hover:text-white hover:bg-slate-900'
-          }`}
-        >
-          <Gauge className="w-4 h-4" /> Cockpit & Data Studio
-        </button>
+      {location.pathname === '/' && setActiveTab && activeTab && (
+        <nav className="max-w-7xl mx-auto px-4 flex items-center overflow-x-auto gap-1.5 text-xs font-semibold py-2 scrollbar-hide">
+          <button
+            onClick={() => setActiveTab('hud')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl transition whitespace-nowrap ${
+              activeTab === 'hud'
+                ? 'bg-amber-500 text-slate-950 font-bold shadow-lg shadow-amber-500/20'
+                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+            }`}
+          >
+            <Gauge className="w-4 h-4" /> Live Cockpit
+          </button>
+          
+          <button
+            onClick={() => setActiveTab('data_studio')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl transition whitespace-nowrap ${
+              activeTab === 'data_studio'
+                ? 'bg-amber-500 text-slate-950 font-bold shadow-lg shadow-amber-500/20'
+                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+            }`}
+          >
+            <Database className="w-4 h-4" /> Data Studio
+          </button>
 
-        <button
-          onClick={() => setActiveTab('telemetry')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl transition whitespace-nowrap ${
-            activeTab === 'telemetry'
-              ? 'bg-amber-500 text-slate-950 font-bold shadow-lg shadow-amber-500/20'
-              : 'text-slate-400 hover:text-white hover:bg-slate-900'
-          }`}
-        >
-          <LineChart className="w-4 h-4" /> Telemetry Lab & Traces
-        </button>
+          <button
+            onClick={() => setActiveTab('telemetry')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl transition whitespace-nowrap ${
+              activeTab === 'telemetry'
+                ? 'bg-amber-500 text-slate-950 font-bold shadow-lg shadow-amber-500/20'
+                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+            }`}
+          >
+            <LineChart className="w-4 h-4" /> Telemetry Lab
+          </button>
 
-        <button
-          onClick={() => setActiveTab('sectors')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl transition whitespace-nowrap ${
-            activeTab === 'sectors'
-              ? 'bg-amber-500 text-slate-950 font-bold shadow-lg shadow-amber-500/20'
-              : 'text-slate-400 hover:text-white hover:bg-slate-900'
-          }`}
-        >
-          <Timer className="w-4 h-4" /> Sectors & Pit Strategy
-        </button>
+          <button
+            onClick={() => setActiveTab('sectors')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl transition whitespace-nowrap ${
+              activeTab === 'sectors'
+                ? 'bg-amber-500 text-slate-950 font-bold shadow-lg shadow-amber-500/20'
+                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+            }`}
+          >
+            <Timer className="w-4 h-4" /> Strategy
+          </button>
 
-        <button
-          onClick={() => setActiveTab('energy_tires')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl transition whitespace-nowrap ${
-            activeTab === 'energy_tires'
-              ? 'bg-amber-500 text-slate-950 font-bold shadow-lg shadow-amber-500/20'
-              : 'text-slate-400 hover:text-white hover:bg-slate-900'
-          }`}
-        >
-          <Zap className="w-4 h-4" /> Energy & Tire Dynamics
-        </button>
+          <button
+            onClick={() => setActiveTab('energy_tires')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl transition whitespace-nowrap ${
+              activeTab === 'energy_tires'
+                ? 'bg-amber-500 text-slate-950 font-bold shadow-lg shadow-amber-500/20'
+                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+            }`}
+          >
+            <Zap className="w-4 h-4" /> Energy & Tires
+          </button>
 
-        <button
-          onClick={() => setActiveTab('mobile_pitwall')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl transition whitespace-nowrap ${
-            activeTab === 'mobile_pitwall'
-              ? 'bg-amber-500 text-slate-950 font-bold shadow-lg shadow-amber-500/20'
-              : 'text-slate-400 hover:text-white hover:bg-slate-900'
-          }`}
-        >
-          <Smartphone className="w-4 h-4 text-emerald-400" />
-          <span>Pit Wall Mobile HUD</span>
-          <span className="text-[10px] bg-slate-800 text-amber-400 font-bold px-1.5 py-0.5 rounded border border-slate-700">
-            60Hz
-          </span>
-        </button>
+          <button
+            onClick={() => setActiveTab('mobile_pitwall')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl transition whitespace-nowrap ${
+              activeTab === 'mobile_pitwall'
+                ? 'bg-amber-500 text-slate-950 font-bold shadow-lg shadow-amber-500/20'
+                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+            }`}
+          >
+            <Smartphone className="w-4 h-4 text-emerald-400" />
+            <span>Pit Wall Mobile</span>
+          </button>
 
-        <button
-          onClick={() => setActiveTab('coaching_bop')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl transition whitespace-nowrap ${
-            activeTab === 'coaching_bop'
-              ? 'bg-amber-500 text-slate-950 font-bold shadow-lg shadow-amber-500/20'
-              : 'text-slate-400 hover:text-white hover:bg-slate-900'
-          }`}
-        >
-          <Compass className="w-4 h-4 text-amber-400" />
-          <span>Driver Coaching & BoP</span>
-        </button>
-      </nav>
+          <button
+            onClick={() => setActiveTab('coaching_bop')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl transition whitespace-nowrap ${
+              activeTab === 'coaching_bop'
+                ? 'bg-amber-500 text-slate-950 font-bold shadow-lg shadow-amber-500/20'
+                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+            }`}
+          >
+            <Compass className="w-4 h-4 text-amber-400" />
+            <span>Driver Coaching</span>
+          </button>
+        </nav>
+      )}
     </header>
   );
 };
+

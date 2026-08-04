@@ -244,8 +244,23 @@ export const DuckDBAnalyzer: React.FC<DuckDBAnalyzerProps> = ({ onLoadTelemetryT
       // Pull all data to compute lap records (will be garbage collected after parse)
       const fullRes = await executeDuckDBQuery(`SELECT * FROM "${tableName}" ORDER BY sample_id;`);
       
+      // Try to read metadata if it exists
+      let metaCarName = undefined;
+      let metaTrackName = undefined;
+      try {
+        const metaRes = await executeDuckDBQuery(`SELECT * FROM uploaded_db.main.metadata`);
+        if (metaRes.rows && metaRes.rows.length > 0) {
+          const carRow = metaRes.rows.find(r => r.key === 'VehicleName' || r.key === 'Vehicle' || r.key === 'Car');
+          const trackRow = metaRes.rows.find(r => r.key === 'TrackName' || r.key === 'Track' || r.key === 'Circuit');
+          if (carRow) metaCarName = carRow.value;
+          if (trackRow) metaTrackName = trackRow.value;
+        }
+      } catch (err) {
+        // metadata table might not exist
+      }
+
       if (fullRes.rows && fullRes.rows.length > 0) {
-        const { track, car } = extractTrackAndCarInfo(fullRes.rows);
+        const { track, car } = extractTrackAndCarInfo(fullRes.rows, metaCarName, metaTrackName);
         const lapRecords = parseRowsToLapRecords(fullRes.rows);
         const traceData = parseRowsToTracePoints(traceRes.rows);
         const laps = Array.from(new Set(fullRes.rows.map((r: any) => r.lap_number || r.Lap || r.lap || 1))).map(Number).sort((a, b) => a - b);
@@ -391,6 +406,11 @@ export const DuckDBAnalyzer: React.FC<DuckDBAnalyzerProps> = ({ onLoadTelemetryT
       const uint8 = new Uint8Array(arrayBuffer);
 
       const sanitizedName = file.name.replace(/[^a-zA-Z0-9_.-]/g, '_');
+      try {
+        await unregisterDuckDBFile(sanitizedName);
+      } catch (e) {
+        // Ignore if not registered
+      }
       await registerDuckDBFile(sanitizedName, uint8);
 
       const ext = file.name.split('.').pop()?.toLowerCase();
@@ -416,6 +436,9 @@ export const DuckDBAnalyzer: React.FC<DuckDBAnalyzerProps> = ({ onLoadTelemetryT
       setDbError(`Error processing ${file.name}: ${err.message || 'Invalid DuckDB format'}`);
     } finally {
       setIsInitializing(false);
+      if (event.target) {
+        event.target.value = '';
+      }
     }
   };
 
@@ -522,9 +545,12 @@ export const DuckDBAnalyzer: React.FC<DuckDBAnalyzerProps> = ({ onLoadTelemetryT
           const fuelCnt = await getTableCount('Fuel Level');
           const gLatCnt = await getTableCount('G Force Lat');
           const gLongCnt = await getTableCount('G Force Long');
-          const ambTempCnt = await getTableCount('Ambient Temp');
-          const trackTempCnt = await getTableCount('Track Temp');
-          const rainCnt = await getTableCount('Rain Intensity');
+          const gpsLatCnt = await getTableCount('GPS Latitude');
+          const gpsLongCnt = await getTableCount('GPS Longitude');
+          const ambTempCnt = hasTable('Ambient Temperature') ? await getTableCount('Ambient Temperature') : await getTableCount('Ambient Temp');
+          const trackTempCnt = hasTable('Track Temperature') ? await getTableCount('Track Temperature') : await getTableCount('Track Temp');
+          const rainCnt = hasTable('Minimum Path Wetness') ? await getTableCount('Minimum Path Wetness') : await getTableCount('Rain Intensity');
+          const speedCnt = hasTable('Ground Speed') ? await getTableCount('Ground Speed') : await getTableCount('GPS Speed');
 
           const rpmSql = hasTable('Engine RPM') ? `SELECT row_number() OVER () - 1 AS idx, value AS engine_rpm FROM uploaded_db.main."Engine RPM"` : `SELECT 0 AS idx, 0 AS engine_rpm WHERE 1=0`;
           const steeringSql = hasTable('Steering Pos') ? `SELECT row_number() OVER () - 1 AS idx, value AS steering_pct FROM uploaded_db.main."Steering Pos"` : `SELECT 0 AS idx, 0 AS steering_pct WHERE 1=0`;
@@ -534,9 +560,24 @@ export const DuckDBAnalyzer: React.FC<DuckDBAnalyzerProps> = ({ onLoadTelemetryT
           const fuelSql = hasTable('Fuel Level') ? `SELECT row_number() OVER () - 1 AS idx, value AS fuel_remaining_l FROM uploaded_db.main."Fuel Level"` : `SELECT 0 AS idx, 0 AS fuel_remaining_l WHERE 1=0`;
           const gLatSql = hasTable('G Force Lat') ? `SELECT row_number() OVER () - 1 AS idx, value AS lat_accel_g FROM uploaded_db.main."G Force Lat"` : `SELECT 0 AS idx, 0 AS lat_accel_g WHERE 1=0`;
           const gLongSql = hasTable('G Force Long') ? `SELECT row_number() OVER () - 1 AS idx, value AS long_accel_g FROM uploaded_db.main."G Force Long"` : `SELECT 0 AS idx, 0 AS long_accel_g WHERE 1=0`;
-          const ambTempSql = hasTable('Ambient Temp') ? `SELECT row_number() OVER () - 1 AS idx, value AS ambient_temp_c FROM uploaded_db.main."Ambient Temp"` : `SELECT 0 AS idx, 22.5 AS ambient_temp_c WHERE 1=0`;
-          const trackTempSql = hasTable('Track Temp') ? `SELECT row_number() OVER () - 1 AS idx, value AS track_temp_c FROM uploaded_db.main."Track Temp"` : `SELECT 0 AS idx, 31.0 AS track_temp_c WHERE 1=0`;
-          const rainSql = hasTable('Rain Intensity') ? `SELECT row_number() OVER () - 1 AS idx, value AS rain_intensity FROM uploaded_db.main."Rain Intensity"` : `SELECT 0 AS idx, 0 AS rain_intensity WHERE 1=0`;
+          const gpsLatSql = hasTable('GPS Latitude') ? `SELECT row_number() OVER () - 1 AS idx, value AS pos_z FROM uploaded_db.main."GPS Latitude"` : `SELECT 0 AS idx, NULL AS pos_z WHERE 1=0`;
+          const gpsLongSql = hasTable('GPS Longitude') ? `SELECT row_number() OVER () - 1 AS idx, value AS pos_x FROM uploaded_db.main."GPS Longitude"` : `SELECT 0 AS idx, NULL AS pos_x WHERE 1=0`;
+          
+          let ambTempSql = `SELECT 0 AS idx, 22.5 AS ambient_temp_c WHERE 1=0`;
+          if (hasTable('Ambient Temperature')) ambTempSql = `SELECT row_number() OVER () - 1 AS idx, value AS ambient_temp_c FROM uploaded_db.main."Ambient Temperature"`;
+          else if (hasTable('Ambient Temp')) ambTempSql = `SELECT row_number() OVER () - 1 AS idx, value AS ambient_temp_c FROM uploaded_db.main."Ambient Temp"`;
+
+          let trackTempSql = `SELECT 0 AS idx, 31.0 AS track_temp_c WHERE 1=0`;
+          if (hasTable('Track Temperature')) trackTempSql = `SELECT row_number() OVER () - 1 AS idx, value AS track_temp_c FROM uploaded_db.main."Track Temperature"`;
+          else if (hasTable('Track Temp')) trackTempSql = `SELECT row_number() OVER () - 1 AS idx, value AS track_temp_c FROM uploaded_db.main."Track Temp"`;
+          
+          let rainSql = `SELECT 0 AS idx, 0 AS rain_intensity WHERE 1=0`;
+          if (hasTable('Minimum Path Wetness')) rainSql = `SELECT row_number() OVER () - 1 AS idx, value AS rain_intensity FROM uploaded_db.main."Minimum Path Wetness"`;
+          else if (hasTable('Rain Intensity')) rainSql = `SELECT row_number() OVER () - 1 AS idx, value AS rain_intensity FROM uploaded_db.main."Rain Intensity"`;
+          
+          let speedSql = `SELECT 0 AS idx, 0 AS speed_kmh WHERE 1=0`;
+          if (hasTable('Ground Speed')) speedSql = `SELECT row_number() OVER () - 1 AS idx, value * 3.6 AS speed_kmh FROM uploaded_db.main."Ground Speed"`;
+          else if (hasTable('GPS Speed')) speedSql = `SELECT row_number() OVER () - 1 AS idx, value * 3.6 AS speed_kmh FROM uploaded_db.main."GPS Speed"`;
           
           const gearSql = hasTable('Gear') ? `SELECT ts, value AS gear FROM uploaded_db.main."Gear"` : `SELECT 0 AS ts, 0 AS gear WHERE 1=0`;
           const lapSql = hasTable('Lap') ? `SELECT ts, value AS lap_number FROM uploaded_db.main."Lap"` : `SELECT 0 AS ts, 1 AS lap_number WHERE 1=0`;
@@ -548,10 +589,11 @@ export const DuckDBAnalyzer: React.FC<DuckDBAnalyzerProps> = ({ onLoadTelemetryT
                 row_number() OVER () - 1 AS idx,
                 ${startTs} + (row_number() OVER () - 1) * 0.01 AS ts,
                 (row_number() OVER () - 1) * 0.01 AS current_lap_time_seconds,
-                COALESCE(value, 0) AS speed_kmh
+                COALESCE(value, 0) AS base_value
               FROM uploaded_db.main."${baseTable}"
             ),
             rpm_t AS (${rpmSql}),
+            speed_t AS (${speedSql}),
             steering_t AS (${steeringSql}),
             throttle_t AS (${throttleSql}),
             brake_t AS (${brakeSql}),
@@ -559,6 +601,8 @@ export const DuckDBAnalyzer: React.FC<DuckDBAnalyzerProps> = ({ onLoadTelemetryT
             fuel_t AS (${fuelSql}),
             g_lat_t AS (${gLatSql}),
             g_long_t AS (${gLongSql}),
+            gps_lat_t AS (${gpsLatSql}),
+            gps_long_t AS (${gpsLongSql}),
             amb_t AS (${ambTempSql}),
             track_t AS (${trackTempSql}),
             rain_t AS (${rainSql}),
@@ -569,7 +613,7 @@ export const DuckDBAnalyzer: React.FC<DuckDBAnalyzerProps> = ({ onLoadTelemetryT
               b.idx + 1 AS id,
               ROUND(b.ts, 3) AS timestamp_s,
               ROUND(b.current_lap_time_seconds, 3) AS current_lap_time_seconds,
-              ROUND(b.speed_kmh, 2) AS speed_kmh,
+              ROUND(COALESCE(speed_t.speed_kmh, b.base_value * 3.6), 2) AS speed_kmh,
               ROUND(COALESCE(rpm_t.engine_rpm, 0), 0) AS engine_rpm,
               ROUND(COALESCE(steering_t.steering_pct, 0), 2) AS steering_pct,
               ROUND(COALESCE(throttle_t.throttle_pct, 0), 1) AS throttle_pct,
@@ -581,10 +625,13 @@ export const DuckDBAnalyzer: React.FC<DuckDBAnalyzerProps> = ({ onLoadTelemetryT
               ROUND(COALESCE(amb_t.ambient_temp_c, 22.5), 1) AS ambient_temp_c,
               ROUND(COALESCE(track_t.track_temp_c, 31.0), 1) AS track_temp_c,
               ROUND(COALESCE(rain_t.rain_intensity, 0), 2) AS rain_intensity,
+              gps_lat_t.pos_z AS pos_z,
+              gps_long_t.pos_x AS pos_x,
               COALESCE(g.gear, 0) AS gear,
               COALESCE(l.lap_number, 1) AS lap_number
             FROM base b
             LEFT JOIN rpm_t ON CAST(FLOOR(b.idx * ${rpmCnt} / ${baseCount}) AS BIGINT) = rpm_t.idx
+            LEFT JOIN speed_t ON CAST(FLOOR(b.idx * ${speedCnt} / ${baseCount}) AS BIGINT) = speed_t.idx
             LEFT JOIN steering_t ON CAST(FLOOR(b.idx * ${steeringCnt} / ${baseCount}) AS BIGINT) = steering_t.idx
             LEFT JOIN throttle_t ON CAST(FLOOR(b.idx * ${throttleCnt} / ${baseCount}) AS BIGINT) = throttle_t.idx
             LEFT JOIN brake_t ON CAST(FLOOR(b.idx * ${brakeCnt} / ${baseCount}) AS BIGINT) = brake_t.idx
@@ -592,6 +639,8 @@ export const DuckDBAnalyzer: React.FC<DuckDBAnalyzerProps> = ({ onLoadTelemetryT
             LEFT JOIN fuel_t ON CAST(FLOOR(b.idx * ${fuelCnt} / ${baseCount}) AS BIGINT) = fuel_t.idx
             LEFT JOIN g_lat_t ON CAST(FLOOR(b.idx * ${gLatCnt} / ${baseCount}) AS BIGINT) = g_lat_t.idx
             LEFT JOIN g_long_t ON CAST(FLOOR(b.idx * ${gLongCnt} / ${baseCount}) AS BIGINT) = g_long_t.idx
+            LEFT JOIN gps_lat_t ON CAST(FLOOR(b.idx * ${gpsLatCnt} / ${baseCount}) AS BIGINT) = gps_lat_t.idx
+            LEFT JOIN gps_long_t ON CAST(FLOOR(b.idx * ${gpsLongCnt} / ${baseCount}) AS BIGINT) = gps_long_t.idx
             LEFT JOIN amb_t ON CAST(FLOOR(b.idx * ${ambTempCnt} / ${baseCount}) AS BIGINT) = amb_t.idx
             LEFT JOIN track_t ON CAST(FLOOR(b.idx * ${trackTempCnt} / ${baseCount}) AS BIGINT) = track_t.idx
             LEFT JOIN rain_t ON CAST(FLOOR(b.idx * ${rainCnt} / ${baseCount}) AS BIGINT) = rain_t.idx
@@ -816,7 +865,7 @@ export const DuckDBAnalyzer: React.FC<DuckDBAnalyzerProps> = ({ onLoadTelemetryT
             return;
           } catch {
             // Full reload of active preset dataset
-            await loadPresetDataset(activePresetId || 'sarthe_ferrari_499p');
+            await loadPresetDataset(activePresetId || 'bahrain_ginetta_lmp3');
             const retryRes = await executeDuckDBQuery(queryToRun);
             const end = performance.now();
             setQueryResults(retryRes);

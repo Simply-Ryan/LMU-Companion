@@ -387,17 +387,19 @@ export default function App() {
         )}
 
         {/* Tab Views */}
-        {connectionSource === 'NO_DATA' && (
+        {connectionSource === 'NO_DATA' && activeTab !== 'data_studio' && (
           <div className="mb-6 bg-slate-900 border border-slate-700 p-6 rounded-2xl flex flex-col items-center justify-center text-center space-y-4">
             <h2 className="text-xl font-bold text-white">No Telemetry Data Available</h2>
             <p className="text-slate-400 max-w-lg">
-              Connect the live Python Bridge to stream real-time shared memory data from Le Mans Ultimate, or scroll down and use the DuckDB Analyzer to upload a saved telemetry file.
+              Connect the live Python Bridge to stream real-time shared memory data from Le Mans Ultimate, or go to the Data Studio tab to upload a saved telemetry file.
             </p>
             <div className="flex space-x-4 mt-2">
               <button onClick={() => setIsPythonBridgeModalOpen(true)} className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-lg transition">Connect Live Bridge</button>
+              <button onClick={() => setActiveTab('data_studio')} className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-lg transition">Go to Data Studio</button>
             </div>
           </div>
         )}
+
         {activeTab === 'hud' && (
           <div className="space-y-6">
             <DashboardHUD
@@ -406,7 +408,11 @@ export default function App() {
               traceData={uploadedFileState?.traceData}
               onOpenConsumptionModal={() => setIsConsumptionModalOpen(true)}
             />
-            {/* Embedded DuckDB File & SQL Explorer directly inside Main Cockpit Tab */}
+          </div>
+        )}
+
+        {activeTab === 'data_studio' && (
+          <div className="space-y-6">
             <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 shadow-xl backdrop-blur-sm">
               <DuckDBAnalyzer onLoadTelemetryToHUD={handleLoadTelemetryToHUD} />
             </div>
